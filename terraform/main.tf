@@ -101,59 +101,44 @@ resource "aws_instance" "app_instance" {
 
   # user_data to install docker, docker-compose and awscli, and prepare deploy folder
   user_data = <<-EOF
-            #!/bin/bash
-            set -e
-            
-            # ------------------------------
-            # Update system packages
-            # ------------------------------
-            yum update -y || true
-            
-            # ------------------------------
-            # Install Docker
-            # ------------------------------
-            amazon-linux-extras enable docker -y
-            amazon-linux-extras install docker -y
-            systemctl enable docker
-            systemctl start docker
-            usermod -aG docker ec2-user
-            
-            # ------------------------------
-            # Install Docker Compose (latest)
-            # ------------------------------
-            DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep tag_name | cut -d '"' -f 4)
-            curl -L "https://github.com/docker/compose/releases/download/$DOCKER_COMPOSE_VERSION/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
-            
-            # Add docker-compose to PATH for all users
-            echo "export PATH=\$PATH:/usr/local/bin" >> /etc/profile.d/docker-compose.sh
-            source /etc/profile.d/docker-compose.sh
-            
-            # ------------------------------
-            # Install AWS CLI v2
-            # ------------------------------
-            yum install -y unzip curl || true
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
-            unzip /tmp/awscliv2.zip -d /tmp
-            /tmp/aws/install || true
-            
-            # ------------------------------
-            # Create deployment folder
-            # ------------------------------
-            mkdir -p /home/ec2-user/deploy
-            chown -R ec2-user:ec2-user /home/ec2-user/deploy
-            
-            # ------------------------------
-            # Verify installations
-            # ------------------------------
-            docker --version
-            docker-compose --version
-            aws --version
-            
-            echo "EC2 setup complete. Ready for Jenkins deployment!"
+                #!/bin/bash
+                set -e
 
-            EOF
+                # Update packages
+                yum update -y || true
 
+                # Install Docker
+                amazon-linux-extras install docker -y || true
+                systemctl enable docker
+                systemctl start docker
+                usermod -aG docker ec2-user
+
+                # Install Docker Compose v2
+                DOCKER_CONFIG=/home/ec2-user/.docker
+                mkdir -p $DOCKER_CONFIG/cli-plugins
+                curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" -o $DOCKER_CONFIG/cli-plugins/docker-compose
+                chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
+                chown -R ec2-user:ec2-user $DOCKER_CONFIG
+
+                # Add Docker Compose to PATH for all users
+                echo "export PATH=\$PATH:/home/ec2-user/.docker/cli-plugins" >> /etc/profile.d/docker-compose.sh
+                source /etc/profile.d/docker-compose.sh
+
+                # Install AWS CLI v2
+                yum install -y unzip curl || true
+                curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
+                unzip /tmp/awscliv2.zip -d /tmp
+                /tmp/aws/install || true
+
+                # Create deploy folder
+                mkdir -p /home/ec2-user/deploy
+                chown -R ec2-user:ec2-user /home/ec2-user/deploy
+
+                # Verify installations
+                docker --version
+                docker compose version
+                aws --version
+                EOF
 
   tags = {
     Name = "microservices-app"

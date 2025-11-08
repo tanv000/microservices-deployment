@@ -32,13 +32,12 @@ pipeline {
             steps {
                 dir('terraform') {
                     script {
-                        env.USER_REPO      = sh(script: 'terraform output -raw user_repo_url', returnStdout: true).trim().toLowerCase()
-                        env.ORDERS_REPO    = sh(script: 'terraform output -raw orders_repo_url', returnStdout: true).trim().toLowerCase()
-                        env.INVENTORY_REPO = sh(script: 'terraform output -raw inventory_repo_url', returnStdout: true).trim().toLowerCase()
+                        env.USER_REPO      = sh(script: 'terraform output -raw user_repo_url', returnStdout: true).trim()
+                        env.ORDERS_REPO    = sh(script: 'terraform output -raw orders_repo_url', returnStdout: true).trim()
+                        env.INVENTORY_REPO = sh(script: 'terraform output -raw inventory_repo_url', returnStdout: true).trim()
                         env.EC2_IP         = sh(script: 'terraform output -raw ec2_public_ip', returnStdout: true).trim()
                         env.AWS_ACCOUNT_ID = sh(script: 'terraform output -raw aws_account_id', returnStdout: true).trim()
                     }
-
                     echo "ECR URLs:"
                     echo "User Repo: ${env.USER_REPO}"
                     echo "Orders Repo: ${env.ORDERS_REPO}"
@@ -74,17 +73,29 @@ pipeline {
             }
         }
 
-        stage('Prepare docker-compose') {
+        stage('Prepare Docker Compose for EC2') {
             steps {
                 script {
-                    // Replace placeholders in docker-compose.yml template
-                    sh '''
-                        cp docker-compose.yml docker-compose.temp
-                        sed -i "s|USER_REPO_PLACEHOLDER|${USER_REPO}|g" docker-compose.temp
-                        sed -i "s|ORDERS_REPO_PLACEHOLDER|${ORDERS_REPO}|g" docker-compose.temp
-                        sed -i "s|INVENTORY_REPO_PLACEHOLDER|${INVENTORY_REPO}|g" docker-compose.temp
-                        mv docker-compose.temp docker-compose.yml
-                    '''
+                    // Create docker-compose.yml with actual ECR image URLs
+                    writeFile file: 'docker-compose.yml', text: """
+version: '3.8'
+
+services:
+  user-service:
+    image: ${env.USER_REPO}:${IMAGE_TAG}
+    ports:
+      - "5001:5000"
+
+  order-service:
+    image: ${env.ORDERS_REPO}:${IMAGE_TAG}
+    ports:
+      - "5002:5000"
+
+  inventory-service:
+    image: ${env.INVENTORY_REPO}:${IMAGE_TAG}
+    ports:
+      - "5003:5000"
+"""
                 }
             }
         }
@@ -93,23 +104,23 @@ pipeline {
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
-                        sh '''
+                        sh """
                             echo "Deploying to EC2: ${EC2_IP}"
 
                             # Create deploy folder
                             ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
 
-                            # Copy docker-compose file
+                            # Copy docker-compose.yml to EC2
                             scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                            # Deploy services using docker-compose (full path)
+                            # Run docker-compose using full path
                             ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} << 'ENDSSH'
-                                cd /home/ec2-user/deploy
-                                sudo /usr/local/bin/docker-compose down || true
-                                sudo /usr/local/bin/docker-compose pull
-                                sudo /usr/local/bin/docker-compose up -d
-ENDSSH
-                        '''
+                            cd /home/ec2-user/deploy
+                            sudo /usr/local/bin/docker-compose down || true
+                            sudo /usr/local/bin/docker-compose pull
+                            sudo /usr/local/bin/docker-compose up -d
+                            ENDSSH
+                        """
                     }
                 }
             }
