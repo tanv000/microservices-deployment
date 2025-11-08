@@ -53,8 +53,8 @@ pipeline {
                 withAWS(credentials: 'aws-access', region: "${REGION}") {
                     script {
                         def services = [
-                            "user-service"     : env.USER_REPO,
-                            "order-service"    : env.ORDERS_REPO,
+                            "user-service": env.USER_REPO,
+                            "orders-service": env.ORDERS_REPO,
                             "inventory-service": env.INVENTORY_REPO
                         ]
 
@@ -64,10 +64,8 @@ pipeline {
                                 docker build -t ${service}:${IMAGE_TAG} ./${service}
                                 docker tag ${service}:${IMAGE_TAG} ${services[service]}:${IMAGE_TAG}
 
-                                echo "Logging in to ECR..."
-                                aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
-
                                 echo "Pushing ${service} to ECR..."
+                                aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
                                 docker push ${services[service]}:${IMAGE_TAG}
                             """
                         }
@@ -80,7 +78,7 @@ pipeline {
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
-                        sh '''
+                        sh """
                             echo "Deploying to EC2: ${EC2_IP}"
 
                             # Create deploy folder
@@ -89,14 +87,13 @@ pipeline {
                             # Copy docker-compose file
                             scp -o StrictHostKeyChecking=no -i $SSH_KEY_FILE docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                            # Pull and run services on EC2
-                            ssh -o StrictHostKeyChecking=no -i $SSH_KEY_FILE $SSH_USER@${EC2_IP} << 'ENDSSH'
-                                cd /home/ec2-user/deploy
-                                sudo docker-compose down || true
-                                sudo docker-compose pull
-                                sudo docker-compose up -d
-                            ENDSSH
-                        '''
+                            # Pull and run services
+                            ssh -o StrictHostKeyChecking=no -i $SSH_KEY_FILE $SSH_USER@${EC2_IP} \
+                                "cd /home/ec2-user/deploy && \
+                                 sudo PATH=\$PATH:/usr/local/bin docker-compose down || true && \
+                                 sudo PATH=\$PATH:/usr/local/bin docker-compose pull && \
+                                 sudo PATH=\$PATH:/usr/local/bin docker-compose up -d"
+                        """
                     }
                 }
             }
