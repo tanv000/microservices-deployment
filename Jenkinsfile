@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        REGION = 'ap-south-1'
-        IMAGE_TAG = "latest"
+        REGION      = 'ap-south-1'
+        IMAGE_TAG   = "latest"
     }
 
     stages {
@@ -38,6 +38,7 @@ pipeline {
                         env.EC2_IP         = sh(script: 'terraform output -raw ec2_public_ip', returnStdout: true).trim()
                         env.AWS_ACCOUNT_ID = sh(script: 'terraform output -raw aws_account_id', returnStdout: true).trim()
                     }
+
                     echo "ECR URLs:"
                     echo "User Repo: ${env.USER_REPO}"
                     echo "Orders Repo: ${env.ORDERS_REPO}"
@@ -73,29 +74,16 @@ pipeline {
             }
         }
 
-        stage('Prepare Docker Compose for EC2') {
+        stage('Prepare docker-compose.yml') {
             steps {
                 script {
-                    // Create docker-compose.yml with actual ECR image URLs
-                    writeFile file: 'docker-compose.yml', text: """
-version: '3.8'
-
-services:
-  user-service:
-    image: ${env.USER_REPO}:${IMAGE_TAG}
-    ports:
-      - "5001:5000"
-
-  order-service:
-    image: ${env.ORDERS_REPO}:${IMAGE_TAG}
-    ports:
-      - "5002:5000"
-
-  inventory-service:
-    image: ${env.INVENTORY_REPO}:${IMAGE_TAG}
-    ports:
-      - "5003:5000"
-"""
+                    // Replace placeholders in docker-compose.yml before sending to EC2
+                    sh """
+                        cp docker-compose.yml docker-compose.tmp.yml
+                        sed -i 's|\${USER_REPO}|${env.USER_REPO}|g' docker-compose.tmp.yml
+                        sed -i 's|\${ORDERS_REPO}|${env.ORDERS_REPO}|g' docker-compose.tmp.yml
+                        sed -i 's|\${INVENTORY_REPO}|${env.INVENTORY_REPO}|g' docker-compose.tmp.yml
+                    """
                 }
             }
         }
@@ -104,23 +92,25 @@ services:
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
-                        sh """
-                            echo "Deploying to EC2: ${EC2_IP}"
+                        echo "Deploying to EC2: ${env.EC2_IP}"
 
-                            # Create deploy folder
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
+                        // Create deploy folder
+                        sh "ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_FILE} ${SSH_USER}@${EC2_IP} 'mkdir -p /home/ec2-user/deploy'"
 
-                            # Copy docker-compose.yml to EC2
-                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+                        // Copy docker-compose.yml to EC2
+                        sh "scp -o StrictHostKeyChecking=no -i ${SSH_KEY_FILE} docker-compose.tmp.yml ${SSH_USER}@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml"
 
-                            # Run docker-compose using full path
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} << 'ENDSSH'
-                            cd /home/ec2-user/deploy
-                            sudo /usr/local/bin/docker-compose down || true
-                            sudo /usr/local/bin/docker-compose pull
-                            sudo /usr/local/bin/docker-compose up -d
-                            ENDSSH
+                        // Run docker compose on EC2 with ECR login
+                        def sshCommand = """
+                            cd /home/ec2-user/deploy && \
+                            sudo chmod +x /usr/local/bin/docker-compose || true && \
+                            docker compose down || true && \
+                            aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com && \
+                            docker compose pull && \
+                            docker compose up -d
                         """
+
+                        sh "ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_FILE} ${SSH_USER}@${EC2_IP} '${sshCommand}'"
                     }
                 }
             }
