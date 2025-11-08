@@ -27,7 +27,7 @@ pipeline {
         }
       }
       steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-access']]) {
           dir("${TERRAFORM_DIR}") {
             sh '''
               terraform init -input=false
@@ -50,7 +50,7 @@ pipeline {
     /* ============ 3. FETCH TERRAFORM OUTPUTS ============ */
     stage('Fetch Terraform Outputs') {
       steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-access']]) {
           dir("${TERRAFORM_DIR}") {
             script {
               env.EC2_IP       = sh(script: 'terraform output -raw ec2_public_ip', returnStdout: true).trim()
