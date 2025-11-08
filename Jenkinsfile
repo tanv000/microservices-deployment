@@ -2,8 +2,6 @@ pipeline {
     agent any
 
     environment {
-        AWS_CREDENTIALS = credentials('aws-access')    // Jenkins credentials ID
-        SSH_KEY = credentials('ec2-ssh-key')           // Jenkins SSH key credential ID
         REGION = 'ap-south-1'
         IMAGE_TAG = "latest"
     }
@@ -54,14 +52,23 @@ pipeline {
             steps {
                 withAWS(credentials: 'aws-access', region: "${REGION}") {
                     script {
-                        sh '''
-                            echo "Logging into ECR..."
-                            aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+                        def services = [
+                            "user-service": env.USER_REPO,
+                            "order-service": env.ORDERS_REPO,
+                            "inventory-service": env.INVENTORY_REPO
+                        ]
 
-                            echo "Building and pushing images using Docker Compose..."
-                            docker-compose -f docker-compose.yml build
-                            docker-compose -f docker-compose.yml push
-                        '''
+                        for (service in services.keySet()) {
+                            sh """
+                                echo "Building ${service}..."
+                                docker build -t ${service}:${IMAGE_TAG} ./${service}
+                                docker tag ${service}:${IMAGE_TAG} ${services[service]}:${IMAGE_TAG}
+
+                                echo "Pushing ${service} to ECR..."
+                                aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+                                docker push ${services[service]}:${IMAGE_TAG}
+                            """
+                        }
                     }
                 }
             }
@@ -69,19 +76,21 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                script {
-                    echo "Deploying to EC2: ${EC2_IP}"
-                    sh """
-                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${EC2_IP} 'mkdir -p /home/ec2-user/deploy'
-                        scp -o StrictHostKeyChecking=no -i ${SSH_KEY} docker-compose.yml ec2-user@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+                withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'KEYFILE', usernameVariable: 'SSHUSER')]) {
+                    script {
+                        sh """
+                            echo "Deploying to EC2: ${env.EC2_IP}"
+                            ssh -o StrictHostKeyChecking=no -i $KEYFILE $SSHUSER@${EC2_IP} 'mkdir -p /home/ec2-user/deploy'
+                            scp -o StrictHostKeyChecking=no -i $KEYFILE docker-compose.yml $SSHUSER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${EC2_IP} '
-                            cd /home/ec2-user/deploy
-                            sudo docker-compose down || true
-                            sudo docker-compose pull
-                            sudo docker-compose up -d
-                        '
-                    """
+                            ssh -o StrictHostKeyChecking=no -i $KEYFILE $SSHUSER@${EC2_IP} '
+                                cd /home/ec2-user/deploy
+                                sudo docker-compose down || true
+                                sudo docker-compose pull
+                                sudo docker-compose up -d
+                            '
+                        """
+                    }
                 }
             }
         }
