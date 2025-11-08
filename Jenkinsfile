@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        REGION      = 'ap-south-1'
-        IMAGE_TAG   = "latest"
+        REGION = 'ap-south-1'
+        IMAGE_TAG = "latest"
     }
 
     stages {
@@ -74,43 +74,35 @@ pipeline {
             }
         }
 
-        stage('Prepare docker-compose.yml') {
-            steps {
-                script {
-                    // Replace placeholders in docker-compose.yml before sending to EC2
-                    sh """
-                        cp docker-compose.yml docker-compose.tmp.yml
-                        sed -i 's|\${USER_REPO}|${env.USER_REPO}|g' docker-compose.tmp.yml
-                        sed -i 's|\${ORDERS_REPO}|${env.ORDERS_REPO}|g' docker-compose.tmp.yml
-                        sed -i 's|\${INVENTORY_REPO}|${env.INVENTORY_REPO}|g' docker-compose.tmp.yml
-                    """
-                }
-            }
-        }
-
         stage('Deploy to EC2') {
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
-                        echo "Deploying to EC2: ${env.EC2_IP}"
+                        // Replace placeholders in docker-compose.yml dynamically
+                        sh '''
+                            cp docker-compose.yml docker-compose.deploy.yml
+                            sed -i "s|USER_REPO_PLACEHOLDER|${USER_REPO}|g" docker-compose.deploy.yml
+                            sed -i "s|ORDERS_REPO_PLACEHOLDER|${ORDERS_REPO}|g" docker-compose.deploy.yml
+                            sed -i "s|INVENTORY_REPO_PLACEHOLDER|${INVENTORY_REPO}|g" docker-compose.deploy.yml
+                        '''
 
-                        // Create deploy folder
-                        sh "ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_FILE} ${SSH_USER}@${EC2_IP} 'mkdir -p /home/ec2-user/deploy'"
+                        // Deploy to EC2
+                        sh """
+                            echo "Deploying to EC2: ${EC2_IP}"
+                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.deploy.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                        // Copy docker-compose.yml to EC2
-                        sh "scp -o StrictHostKeyChecking=no -i ${SSH_KEY_FILE} docker-compose.tmp.yml ${SSH_USER}@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml"
+                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "
+                                mkdir -p /home/ec2-user/deploy
 
-                        // Run docker compose on EC2 with ECR login
-                        def sshCommand = """
-                            cd /home/ec2-user/deploy && \
-                            sudo chmod +x /usr/local/bin/docker-compose || true && \
-                            docker compose down || true && \
-                            aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com && \
-                            docker compose pull && \
-                            docker compose up -d
+                                # Login to ECR on EC2
+                                aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+
+                                # Pull and run containers
+                                cd /home/ec2-user/deploy
+                                docker-compose pull
+                                docker-compose up -d
+                            "
                         """
-
-                        sh "ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_FILE} ${SSH_USER}@${EC2_IP} '${sshCommand}'"
                     }
                 }
             }
