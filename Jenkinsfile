@@ -1,140 +1,152 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    AWS_REGION    = 'ap-south-1'
-    AWS_ACCOUNT_ID = '708972351530'      
-    TERRAFORM_DIR = 'terraform'
-    IMAGE_TAG     = 'latest'
-  }
+    environment {
+        // ======== CONFIGURABLE VARIABLES ========
 
-  stages {
+        // AWS region
+        AWS_REGION = 'ap-south-1'
 
-    /* ============ 1. CHECKOUT CODE ============ */
-    stage('Checkout') {
-      steps {
-        echo "Fetching code from GitHub repository configured in Jenkins job..."
-        checkout scm
-      }
+        // Terraform directory (where .tf files are)
+        TERRAFORM_DIR = './terraform'
+
+        // Docker image version/tag
+        IMAGE_TAG = "latest"
+
+        // Jenkins credentials IDs
+        AWS_CREDS = 'aws-access'
+        EC2_SSH_KEY = 'ec2-ssh-key'
+
+        // ECR repositories (Terraform will create them)
+        USER_REPO_NAME = "user-service-repo"
+        ORDERS_REPO_NAME = "orders-service-repo"
+        INVENTORY_REPO_NAME = "inventory-service-repo"
+
+        // Local docker-compose file
+        DOCKER_COMPOSE_FILE = './docker-compose.yml'
     }
 
-    /* ============ 2. TERRAFORM (IaC) ============ */
-    stage('Terraform Init & Apply (Conditional)') {
-      when {
-        anyOf {
-          changeset "terraform/**"
-          expression { env.BRANCH_NAME == 'main' }
-        }
-      }
-      steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-access']]) {
-          dir("${TERRAFORM_DIR}") {
-            sh '''
-              terraform init -input=false
-              terraform plan -out=tfplan -input=false
-              terraform show -json tfplan > tfplan.json || true
-              CHANGES=$(jq '.resource_changes | length' tfplan.json || echo "0")
+    stages {
 
-              if [ "$CHANGES" -gt 0 ]; then
-                echo "Terraform changes detected: $CHANGES resources. Applying..."
-                terraform apply -auto-approve tfplan
-              else
-                echo "No Terraform changes detected. Skipping apply."
-              fi
-            '''
-          }
-        }
-      }
-    }
-
-    /* ============ 3. FETCH TERRAFORM OUTPUTS ============ */
-    stage('Fetch Terraform Outputs') {
-      steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-access']]) {
-          dir("${TERRAFORM_DIR}") {
-            script {
-              env.EC2_IP       = sh(script: 'terraform output -raw ec2_public_ip', returnStdout: true).trim()
-              env.USER_REPO    = sh(script: 'terraform output -raw user_repo_url', returnStdout: true).trim()
-              env.ORDERS_REPO  = sh(script: 'terraform output -raw orders_repo_url', returnStdout: true).trim()
-              env.INVENTORY_REPO = sh(script: 'terraform output -raw inventory_repo_url', returnStdout: true).trim()
-              echo "EC2 Instance IP: ${env.EC2_IP}"
+        // ===================================================
+        stage('Checkout') {
+            steps {
+                echo "Fetching code from GitHub repository..."
+                checkout scm
             }
-          }
         }
-      }
-    }
 
-    /* ============ 4. BUILD DOCKER IMAGES ============ */
-    stage('Build Docker Images') {
-      steps {
-        script {
-          sh "docker build -t user-service:${IMAGE_TAG} ./user-service"
-          sh "docker build -t order-service:${IMAGE_TAG} ./order-service"
-          sh "docker build -t inventory-service:${IMAGE_TAG} ./inventory-service"
+        // ===================================================
+        stage('Terraform Init & Apply') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDS}"]]) {
+                    dir("${TERRAFORM_DIR}") {
+                        sh '''
+                            echo "Initializing Terraform..."
+                            terraform init -input=false
+
+                            echo "Validating Terraform..."
+                            terraform validate
+
+                            echo "Planning Terraform changes..."
+                            terraform plan -out=tfplan -input=false
+
+                            echo "Applying Terraform..."
+                            terraform apply -auto-approve -input=false
+                        '''
+                    }
+                }
+            }
         }
-      }
-    }
 
-    /* ============ 5. PUSH IMAGES TO ECR ============ */
-    stage('Push Docker Images to ECR') {
-      steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-access']]) {
-          script {
-            sh """
-              aws ecr get-login-password --region ${AWS_REGION} | \
-              docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+        // ===================================================
+        stage('Fetch Terraform Outputs') {
+            steps {
+                script {
+                    echo "Fetching Terraform outputs..."
+                    dir("${TERRAFORM_DIR}") {
+                        USER_REPO_URL = sh(script: "terraform output -raw user_repo_url", returnStdout: true).trim()
+                        ORDERS_REPO_URL = sh(script: "terraform output -raw orders_repo_url", returnStdout: true).trim()
+                        INVENTORY_REPO_URL = sh(script: "terraform output -raw inventory_repo_url", returnStdout: true).trim()
+                        EC2_IP = sh(script: "terraform output -raw ec2_public_ip", returnStdout: true).trim()
+                    }
 
-              docker tag user-service:${IMAGE_TAG} ${USER_REPO}:${IMAGE_TAG}
-              docker tag order-service:${IMAGE_TAG} ${ORDERS_REPO}:${IMAGE_TAG}
-              docker tag inventory-service:${IMAGE_TAG} ${INVENTORY_REPO}:${IMAGE_TAG}
-
-              docker push ${USER_REPO}:${IMAGE_TAG}
-              docker push ${ORDERS_REPO}:${IMAGE_TAG}
-              docker push ${INVENTORY_REPO}:${IMAGE_TAG}
-            """
-          }
+                    echo "Terraform Outputs Loaded:"
+                    echo "User Repo: ${USER_REPO_URL}"
+                    echo "Orders Repo: ${ORDERS_REPO_URL}"
+                    echo "Inventory Repo: ${INVENTORY_REPO_URL}"
+                    echo "EC2 IP: ${EC2_IP}"
+                }
+            }
         }
-      }
-    }
 
-    /* ============ 6. DEPLOY TO EC2 ============ */
-    stage('Deploy to EC2 Instance') {
-      steps {
-        withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'EC2_KEY')]) {
-          script {
-            sh """
-              # Prepare docker-compose with ECR URLs
-              sed -e 's|__USER_REPO__|${USER_REPO}|g' \
-                  -e 's|__ORDERS_REPO__|${ORDERS_REPO}|g' \
-                  -e 's|__INVENTORY_REPO__|${INVENTORY_REPO}|g' \
-                  -e 's|__TAG__|${IMAGE_TAG}|g' \
-                  docker-compose.yml > docker-compose.ec2.yml
-
-              # Copy compose file to EC2 and deploy
-              scp -o StrictHostKeyChecking=no -i ${EC2_KEY} docker-compose.ec2.yml ec2-user@${EC2_IP}:/home/ec2-user/docker-compose.yml
-              ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ec2-user@${EC2_IP} << EOF
-                AWS_REGION="${AWS_REGION}"
-                ACCOUNT_ID="${AWS_ACCOUNT_ID}"
-                aws ecr get-login-password --region $AWS_REGION | \
-                docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-                docker-compose -f /home/ec2-user/docker-compose.yml up -d --remove-orphans
-              EOF
-            """
-          }
+        // ===================================================
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    echo "Building Docker images for all microservices..."
+                    sh """
+                        docker build -t ${USER_REPO_URL}:${IMAGE_TAG} ./user
+                        docker build -t ${ORDERS_REPO_URL}:${IMAGE_TAG} ./orders
+                        docker build -t ${INVENTORY_REPO_URL}:${IMAGE_TAG} ./inventory
+                    """
+                }
+            }
         }
-      }
-    }
-  }
 
-  post {
-    success {
-      echo "Deployment successful! App is live on EC2."
+        // ===================================================
+        stage('Push Docker Images to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDS}"]]) {
+                    script {
+                        echo "Logging in to AWS ECR and pushing Docker images..."
+                        sh """
+                            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${USER_REPO_URL%/*}
+
+                            docker push ${USER_REPO_URL}:${IMAGE_TAG}
+                            docker push ${ORDERS_REPO_URL}:${IMAGE_TAG}
+                            docker push ${INVENTORY_REPO_URL}:${IMAGE_TAG}
+                        """
+                    }
+                }
+            }
+        }
+
+        // ===================================================
+        stage('Deploy to EC2 Instance') {
+            steps {
+                script {
+                    echo "Deploying containers to EC2 instance: ${EC2_IP}"
+
+                    // Substitute env vars in docker-compose template
+                    sh """
+                        envsubst < ${DOCKER_COMPOSE_FILE} > docker-compose-final.yml
+                    """
+
+                    // Copy to EC2 and deploy
+                    sshagent(credentials: ["${EC2_SSH_KEY}"]) {
+                        sh """
+                            scp -o StrictHostKeyChecking=no docker-compose-final.yml ec2-user@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+
+                            ssh -o StrictHostKeyChecking=no ec2-user@${EC2_IP} '
+                                cd /home/ec2-user/deploy &&
+                                docker-compose down || true &&
+                                docker-compose pull &&
+                                docker-compose up -d
+                            '
+                        """
+                    }
+                }
+            }
+        }
     }
-    failure {
-      echo "Pipeline failed. Check console output for details."
+
+    post {
+        success {
+            echo "Pipeline executed successfully!"
+        }
+        failure {
+            echo "Pipeline failed. Check console output for errors."
+        }
     }
-    always {
-      echo "Pipeline finished."
-    }
-  }
 }
