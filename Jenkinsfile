@@ -81,18 +81,19 @@ pipeline {
                         sh """
                             echo "Deploying to EC2: ${EC2_IP}"
 
-                            # Create deploy folder
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
+                            # Create deploy folder on EC2
+                            ssh -o StrictHostKeyChecking=no -i $SSH_KEY_FILE $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
 
-                            # Copy docker-compose file
-                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+                            # Copy docker-compose file to EC2
+                            scp -o StrictHostKeyChecking=no -i $SSH_KEY_FILE docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                            # Pull and run services
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} \
-                                "cd /home/ec2-user/deploy && \
-                                 sudo PATH=\$PATH:/usr/local/bin docker-compose down || true && \
-                                 sudo PATH=\$PATH:/usr/local/bin docker-compose pull && \
-                                 sudo PATH=\$PATH:/usr/local/bin docker-compose up -d"
+                            # Deploy services on EC2 (Linux docker-compose)
+                            ssh -o StrictHostKeyChecking=no -i $SSH_KEY_FILE $SSH_USER@${EC2_IP} "
+                                cd /home/ec2-user/deploy &&
+                                sudo /usr/local/bin/docker-compose down || true &&
+                                sudo /usr/local/bin/docker-compose pull &&
+                                sudo /usr/local/bin/docker-compose up -d
+                            "
                         """
                     }
                 }
