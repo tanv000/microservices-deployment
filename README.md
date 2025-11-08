@@ -23,8 +23,6 @@ microservices-deployment/
 │   ├── main.tf
 │   ├── variables.tf
 │   ├── outputs.tf
-│   ├── provider.tf
-│   └── terraform.tfvars      # optional for your own variable values
 │
 ├── Jenkinsfile
 │
