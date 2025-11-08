@@ -7,6 +7,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout Code') {
             steps {
                 git branch: 'main', url: 'https://github.com/tanv000/microservices-deployment.git'
@@ -37,6 +38,7 @@ pipeline {
                         env.EC2_IP         = sh(script: 'terraform output -raw ec2_public_ip', returnStdout: true).trim()
                         env.AWS_ACCOUNT_ID = sh(script: 'terraform output -raw aws_account_id', returnStdout: true).trim()
                     }
+
                     echo "ECR URLs:"
                     echo "User Repo: ${env.USER_REPO}"
                     echo "Orders Repo: ${env.ORDERS_REPO}"
@@ -75,9 +77,8 @@ pipeline {
         stage('Prepare docker-compose.yml') {
             steps {
                 script {
-                    // Replace placeholders in template with real ECR URLs
+                    // Replace placeholders in-place
                     sh """
-                        cp docker-compose.yml.template docker-compose.yml
                         sed -i 's|\${USER_REPO}|${USER_REPO}|g' docker-compose.yml
                         sed -i 's|\${ORDERS_REPO}|${ORDERS_REPO}|g' docker-compose.yml
                         sed -i 's|\${INVENTORY_REPO}|${INVENTORY_REPO}|g' docker-compose.yml
@@ -90,23 +91,23 @@ pipeline {
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
-                        sh '''
+                        sh """
                             echo "Deploying to EC2: ${EC2_IP}"
 
                             # Create deploy folder
                             ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
 
-                            # Copy final docker-compose.yml
+                            # Copy docker-compose file
                             scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                            # Deploy services
+                            # Deploy services using docker-compose
                             ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} << 'ENDSSH'
                                 cd /home/ec2-user/deploy
-                                sudo /usr/local/bin/docker-compose down || true
-                                sudo /usr/local/bin/docker-compose pull
-                                sudo /usr/local/bin/docker-compose up -d
+                                sudo docker-compose down || true
+                                sudo docker-compose pull
+                                sudo docker-compose up -d
 ENDSSH
-                        '''
+                        """
                     }
                 }
             }
@@ -118,7 +119,7 @@ ENDSSH
             echo "Pipeline executed successfully!"
         }
         failure {
-            echo "Pipeline failed. Check logs."
+            echo "Pipeline failed. Check Jenkins logs."
         }
     }
 }
