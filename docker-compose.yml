@@ -2,19 +2,16 @@ version: '3.8'
 
 services:
   user-service:
-    build: ./user-service
     image: ${USER_REPO}:latest
     ports:
       - "5001:5000"
 
   order-service:
-    build: ./order-service
     image: ${ORDERS_REPO}:latest
     ports:
       - "5002:5000"
 
   inventory-service:
-    build: ./inventory-service
     image: ${INVENTORY_REPO}:latest
     ports:
       - "5003:5000"
