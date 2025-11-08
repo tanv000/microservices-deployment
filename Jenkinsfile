@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        AWS_CREDENTIALS = credentials('aws-access')    // Jenkins credentials ID for AWS
+        AWS_CREDENTIALS = credentials('aws-access')    // Jenkins credentials ID
         SSH_KEY = credentials('ec2-ssh-key')           // Jenkins SSH key credential ID
         REGION = 'ap-south-1'
         IMAGE_TAG = "latest"
@@ -67,28 +67,13 @@ pipeline {
             }
         }
 
-        stage('Prepare Docker Compose for Deployment') {
-            steps {
-                script {
-                    sh '''
-                        cp docker-compose.yml docker-compose.ec2.yml
-
-                        sed -i "s|__USER_REPO__|${USER_REPO}|g" docker-compose.ec2.yml
-                        sed -i "s|__ORDERS_REPO__|${ORDERS_REPO}|g" docker-compose.ec2.yml
-                        sed -i "s|__INVENTORY_REPO__|${INVENTORY_REPO}|g" docker-compose.ec2.yml
-                        sed -i "s|__TAG__|${IMAGE_TAG}|g" docker-compose.ec2.yml
-                    '''
-                }
-            }
-        }
-
         stage('Deploy to EC2') {
             steps {
                 script {
                     echo "Deploying to EC2: ${EC2_IP}"
                     sh """
                         ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${EC2_IP} 'mkdir -p /home/ec2-user/deploy'
-                        scp -o StrictHostKeyChecking=no -i ${SSH_KEY} docker-compose.ec2.yml ec2-user@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+                        scp -o StrictHostKeyChecking=no -i ${SSH_KEY} docker-compose.yml ec2-user@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
                         ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${EC2_IP} '
                             cd /home/ec2-user/deploy
