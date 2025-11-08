@@ -1,16 +1,16 @@
 version: '3'
 services:
   user-service:
-    build: ./user-service
+    image: __USER_REPO__:__TAG__
     ports:
       - "5001:5000"
 
   order-service:
-    build: ./order-service
+    image: __ORDERS_REPO__:__TAG__
     ports:
       - "5002:5000"
 
   inventory-service:
-    build: ./inventory-service
+    image: __INVENTORY_REPO__:__TAG__
     ports:
       - "5003:5000"
