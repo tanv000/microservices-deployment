@@ -54,7 +54,7 @@ pipeline {
                     script {
                         def services = [
                             "user-service": env.USER_REPO,
-                            "orders-service": env.ORDERS_REPO,
+                            "order-service": env.ORDERS_REPO,
                             "inventory-service": env.INVENTORY_REPO
                         ]
 
