@@ -54,7 +54,7 @@ pipeline {
                     script {
                         def services = [
                             "user-service": env.USER_REPO,
-                            "order-service": env.ORDERS_REPO,
+                            "orders-service": env.ORDERS_REPO,
                             "inventory-service": env.INVENTORY_REPO
                         ]
 
@@ -75,25 +75,23 @@ pipeline {
         }
 
         stage('Deploy to EC2') {
-    steps {
-        withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'KEYFILE', usernameVariable: 'SSHUSER')]) {
-            sh '''
-                echo "Deploying to EC2: '$EC2_IP'"
-                
-                ssh -o StrictHostKeyChecking=no -i "$KEYFILE" "$SSHUSER@$EC2_IP" 'mkdir -p /home/ec2-user/deploy'
-                scp -o StrictHostKeyChecking=no -i "$KEYFILE" docker-compose.yml "$SSHUSER@$EC2_IP:/home/ec2-user/deploy/docker-compose.yml"
-                
-                ssh -o StrictHostKeyChecking=no -i "$KEYFILE" "$SSHUSER@$EC2_IP" '
-                    cd /home/ec2-user/deploy
-                    sudo docker-compose down || true
-                    sudo docker-compose pull
-                    sudo docker-compose up -d
-                '
-            '''
-        }
-    }
-}
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'KEYFILE', usernameVariable: 'SSHUSER')]) {
+                    sh '''
+                        echo "Deploying to EC2: $EC2_IP"
 
+                        ssh -o StrictHostKeyChecking=no -i "$KEYFILE" "$SSHUSER@$EC2_IP" 'mkdir -p /home/ec2-user/deploy'
+                        scp -o StrictHostKeyChecking=no -i "$KEYFILE" docker-compose.yml "$SSHUSER@$EC2_IP:/home/ec2-user/deploy/docker-compose.yml"
+
+                        ssh -o StrictHostKeyChecking=no -i "$KEYFILE" "$SSHUSER@$EC2_IP" '
+                            cd /home/ec2-user/deploy
+                            sudo docker-compose down || true
+                            sudo docker-compose pull
+                            sudo docker-compose up -d
+                        '
+                    '''
+                }
+            }
         }
     }
 
