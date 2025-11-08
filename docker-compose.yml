@@ -1,16 +1,23 @@
-version: '3'
+version: '3.8'
+
 services:
   user-service:
-    image: __USER_REPO__:__TAG__
+    image: ${USER_REPO}:latest
+    container_name: user-service
     ports:
       - "5001:5000"
+    restart: always
 
-  order-service:
-    image: __ORDERS_REPO__:__TAG__
+  orders-service:
+    image: ${ORDERS_REPO}:latest
+    container_name: orders-service
     ports:
       - "5002:5000"
+    restart: always
 
   inventory-service:
-    image: __INVENTORY_REPO__:__TAG__
+    image: ${INVENTORY_REPO}:latest
+    container_name: inventory-service
     ports:
       - "5003:5000"
+    restart: always
