@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        REGION = 'ap-south-1'
-        IMAGE_TAG = "latest"
+        REGION     = 'ap-south-1'
+        IMAGE_TAG  = 'latest'
     }
 
     stages {
@@ -37,13 +37,13 @@ pipeline {
                         env.INVENTORY_REPO = sh(script: 'terraform output -raw inventory_repo_url', returnStdout: true).trim()
                         env.EC2_IP         = sh(script: 'terraform output -raw ec2_public_ip', returnStdout: true).trim()
                         env.AWS_ACCOUNT_ID = sh(script: 'terraform output -raw aws_account_id', returnStdout: true).trim()
-                    }
 
-                    echo "ECR URLs:"
-                    echo "User Repo: ${env.USER_REPO}"
-                    echo "Orders Repo: ${env.ORDERS_REPO}"
-                    echo "Inventory Repo: ${env.INVENTORY_REPO}"
-                    echo "EC2 IP: ${env.EC2_IP}"
+                        echo "ECR URLs:"
+                        echo "User Repo: ${env.USER_REPO}"
+                        echo "Orders Repo: ${env.ORDERS_REPO}"
+                        echo "Inventory Repo: ${env.INVENTORY_REPO}"
+                        echo "EC2 IP: ${env.EC2_IP}"
+                    }
                 }
             }
         }
@@ -79,22 +79,18 @@ pipeline {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
                         sh '''
-                            echo "Deploying to EC2: $EC2_IP"
+                            echo "Deploying to EC2: ${EC2_IP}"
 
                             # Create deploy folder
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@$EC2_IP "mkdir -p /home/ec2-user/deploy"
+                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
 
-                            # Copy docker-compose template
-                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml.template $SSH_USER@$EC2_IP:/home/ec2-user/deploy/docker-compose.yml.template
+                            # Copy docker-compose file
+                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                            # Generate final docker-compose.yml and deploy services
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@$EC2_IP << 'ENDSSH'
+                            # Deploy services using docker-compose
+                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} << 'ENDSSH'
                                 cd /home/ec2-user/deploy
-
-                                # Replace placeholders with actual ECR URLs
-                                sed "s|USER_REPO_PLACEHOLDER|$USER_REPO|g; s|ORDERS_REPO_PLACEHOLDER|$ORDERS_REPO|g; s|INVENTORY_REPO_PLACEHOLDER|$INVENTORY_REPO|g" docker-compose.yml.template > docker-compose.yml
-
-                                # Deploy with docker-compose
+                                sudo chmod +x /usr/local/bin/docker-compose || true
                                 sudo /usr/local/bin/docker-compose down || true
                                 sudo /usr/local/bin/docker-compose pull
                                 sudo /usr/local/bin/docker-compose up -d
@@ -111,7 +107,7 @@ ENDSSH
             echo "Pipeline executed successfully!"
         }
         failure {
-            echo "Pipeline failed. Check logs."
+            echo "Pipeline failed. Check Jenkins logs."
         }
     }
 }
