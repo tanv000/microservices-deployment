@@ -52,16 +52,25 @@ pipeline {
             steps {
                 withAWS(credentials: 'aws-access', region: "${REGION}") {
                     script {
-                        // Login to ECR first
-                        sh """
-                            aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
-                        """
+                        def services = [
+                            "user-service"     : env.USER_REPO,
+                            "order-service"    : env.ORDERS_REPO,
+                            "inventory-service": env.INVENTORY_REPO
+                        ]
 
-                        // Build & push all services using docker-compose
-                        sh """
-                            docker-compose build
-                            docker-compose push
-                        """
+                        for (service in services.keySet()) {
+                            sh """
+                                echo "Building ${service}..."
+                                docker build -t ${service}:${IMAGE_TAG} ./${service}
+                                docker tag ${service}:${IMAGE_TAG} ${services[service]}:${IMAGE_TAG}
+
+                                echo "Logging in to ECR..."
+                                aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+
+                                echo "Pushing ${service} to ECR..."
+                                docker push ${services[service]}:${IMAGE_TAG}
+                            """
+                        }
                     }
                 }
             }
@@ -69,20 +78,25 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'KEYFILE', usernameVariable: 'SSHUSER')]) {
+                withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
-                        sh """
+                        sh '''
                             echo "Deploying to EC2: ${EC2_IP}"
-                            ssh -o StrictHostKeyChecking=no -i $KEYFILE $SSHUSER@${EC2_IP} 'mkdir -p /home/ec2-user/deploy'
-                            scp -o StrictHostKeyChecking=no -i $KEYFILE docker-compose.yml $SSHUSER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                            ssh -o StrictHostKeyChecking=no -i $KEYFILE $SSHUSER@${EC2_IP} '
+                            # Create deploy folder
+                            ssh -o StrictHostKeyChecking=no -i $SSH_KEY_FILE $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
+
+                            # Copy docker-compose file
+                            scp -o StrictHostKeyChecking=no -i $SSH_KEY_FILE docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+
+                            # Pull and run services on EC2
+                            ssh -o StrictHostKeyChecking=no -i $SSH_KEY_FILE $SSH_USER@${EC2_IP} << 'ENDSSH'
                                 cd /home/ec2-user/deploy
                                 sudo docker-compose down || true
                                 sudo docker-compose pull
                                 sudo docker-compose up -d
-                            '
-                        """
+                            ENDSSH
+                        '''
                     }
                 }
             }
