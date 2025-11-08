@@ -145,7 +145,3 @@ resource "aws_instance" "app_instance" {
   }
 }
 
-resource "aws_ec2_instance_state" "app_instance_state_manager" {
-  instance_id = aws_instance.app_instance.id
-  state       = "running"
-}
