@@ -79,18 +79,22 @@ pipeline {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
                         sh '''
-                            echo "Deploying to EC2: ${EC2_IP}"
+                            echo "Deploying to EC2: $EC2_IP"
 
                             # Create deploy folder
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "mkdir -p /home/ec2-user/deploy"
+                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@$EC2_IP "mkdir -p /home/ec2-user/deploy"
 
-                            # Copy docker-compose file
-                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+                            # Copy docker-compose template
+                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.yml.template $SSH_USER@$EC2_IP:/home/ec2-user/deploy/docker-compose.yml.template
 
-                            # Deploy services using docker-compose
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} << 'ENDSSH'
+                            # Generate final docker-compose.yml and deploy services
+                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@$EC2_IP << 'ENDSSH'
                                 cd /home/ec2-user/deploy
-                                sudo chmod +x /usr/local/bin/docker-compose || true
+
+                                # Replace placeholders with actual ECR URLs
+                                sed "s|USER_REPO_PLACEHOLDER|$USER_REPO|g; s|ORDERS_REPO_PLACEHOLDER|$ORDERS_REPO|g; s|INVENTORY_REPO_PLACEHOLDER|$INVENTORY_REPO|g" docker-compose.yml.template > docker-compose.yml
+
+                                # Deploy with docker-compose
                                 sudo /usr/local/bin/docker-compose down || true
                                 sudo /usr/local/bin/docker-compose pull
                                 sudo /usr/local/bin/docker-compose up -d
@@ -107,7 +111,7 @@ ENDSSH
             echo "Pipeline executed successfully!"
         }
         failure {
-            echo "Pipeline failed. Check Jenkins logs."
+            echo "Pipeline failed. Check logs."
         }
     }
 }

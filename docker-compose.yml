@@ -1,17 +1,16 @@
-version: '3.8'
-
+# docker-compose.yml.template
 services:
   user-service:
-    image: ${USER_REPO}:latest
+    image: USER_REPO_PLACEHOLDER:latest
     ports:
       - "5001:5000"
 
   order-service:
-    image: ${ORDERS_REPO}:latest
+    image: ORDERS_REPO_PLACEHOLDER:latest
     ports:
       - "5002:5000"
 
   inventory-service:
-    image: ${INVENTORY_REPO}:latest
+    image: INVENTORY_REPO_PLACEHOLDER:latest
     ports:
       - "5003:5000"

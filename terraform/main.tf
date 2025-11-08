@@ -51,7 +51,7 @@ resource "aws_iam_role" "ec2_role" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
       Action    = "sts:AssumeRole"
     }]
@@ -103,38 +103,55 @@ resource "aws_instance" "app_instance" {
   user_data = <<-EOF
             #!/bin/bash
             set -e
-
-            # Update packages
+            
+            # ------------------------------
+            # Update system packages
+            # ------------------------------
             yum update -y || true
-
+            
+            # ------------------------------
             # Install Docker
-            amazon-linux-extras install docker -y || true
+            # ------------------------------
+            amazon-linux-extras enable docker -y
+            amazon-linux-extras install docker -y
             systemctl enable docker
             systemctl start docker
             usermod -aG docker ec2-user
-
-            # Install docker-compose
-            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            
+            # ------------------------------
+            # Install Docker Compose (latest)
+            # ------------------------------
+            DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep tag_name | cut -d '"' -f 4)
+            curl -L "https://github.com/docker/compose/releases/download/$DOCKER_COMPOSE_VERSION/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
             chmod +x /usr/local/bin/docker-compose
-
-            # Add /usr/local/bin to PATH for all users
+            
+            # Add docker-compose to PATH for all users
             echo "export PATH=\$PATH:/usr/local/bin" >> /etc/profile.d/docker-compose.sh
             source /etc/profile.d/docker-compose.sh
-
+            
+            # ------------------------------
             # Install AWS CLI v2
+            # ------------------------------
             yum install -y unzip curl || true
             curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
             unzip /tmp/awscliv2.zip -d /tmp
             /tmp/aws/install || true
-
-            # Create deploy folder
+            
+            # ------------------------------
+            # Create deployment folder
+            # ------------------------------
             mkdir -p /home/ec2-user/deploy
             chown -R ec2-user:ec2-user /home/ec2-user/deploy
-
+            
+            # ------------------------------
             # Verify installations
+            # ------------------------------
             docker --version
             docker-compose --version
             aws --version
+            
+            echo "EC2 setup complete. Ready for Jenkins deployment!"
+
             EOF
 
 
