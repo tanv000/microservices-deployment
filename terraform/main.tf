@@ -101,28 +101,42 @@ resource "aws_instance" "app_instance" {
 
   # user_data to install docker, docker-compose and awscli, and prepare deploy folder
   user_data = <<-EOF
-              #!/bin/bash
-              set -e
-              yum update -y || true
-              amazon-linux-extras install docker -y || true
-              systemctl start docker || service docker start || true
-              systemctl enable docker || true
-              usermod -aG docker ec2-user || true
+            #!/bin/bash
+            set -e
 
-              # Install docker-compose (binary)
-              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-              chmod +x /usr/local/bin/docker-compose
+            # Update packages
+            yum update -y || true
 
-              # Install AWS CLI v2
-              yum install -y unzip || true
-              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
-              unzip /tmp/awscliv2.zip -d /tmp
-              /tmp/aws/install || true
+            # Install Docker
+            amazon-linux-extras install docker -y || true
+            systemctl enable docker
+            systemctl start docker
+            usermod -aG docker ec2-user
 
-              # create deploy folder
-              mkdir -p /home/ec2-user/deploy
-              chown -R ec2-user:ec2-user /home/ec2-user/deploy
-              EOF
+            # Install docker-compose
+            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            chmod +x /usr/local/bin/docker-compose
+
+            # Add /usr/local/bin to PATH for all users
+            echo "export PATH=\$PATH:/usr/local/bin" >> /etc/profile.d/docker-compose.sh
+            source /etc/profile.d/docker-compose.sh
+
+            # Install AWS CLI v2
+            yum install -y unzip curl || true
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
+            unzip /tmp/awscliv2.zip -d /tmp
+            /tmp/aws/install || true
+
+            # Create deploy folder
+            mkdir -p /home/ec2-user/deploy
+            chown -R ec2-user:ec2-user /home/ec2-user/deploy
+
+            # Verify installations
+            docker --version
+            docker-compose --version
+            aws --version
+            EOF
+
 
   tags = {
     Name = "microservices-app"
