@@ -13,6 +13,54 @@ provider "aws" {
   region = var.aws_region
 }
 
+# --- Remote State Backend Resources ---
+
+# 1. S3 Bucket for Remote State File
+# Note: Bucket name must be globally unique.
+resource "aws_s3_bucket" "terraform_state" {
+  bucket = "microservices-state-bucket-tanv000" # MUST MATCH 'backend.tf'
+
+  tags = {
+    Name = "Microservices-Terraform-State"
+  }
+}
+
+# Enforce encryption on the state bucket (Security Best Practice)
+resource "aws_s3_bucket_server_side_encryption_configuration" "state_bucket_encryption" {
+  bucket = aws_s3_bucket.terraform_state.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Enable versioning to keep a history of the state file (Best Practice)
+resource "aws_s3_bucket_versioning" "state_bucket_versioning" {
+  bucket = aws_s3_bucket.terraform_state.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# 2. DynamoDB Table for State Locking (Prevents concurrent 'terraform apply' runs)
+resource "aws_dynamodb_table" "terraform_state_lock" {
+  name           = "terraform-state-lock" # MUST MATCH 'backend.tf'
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "LockID"
+
+  attribute {
+    name = "LockID"
+    type = "S"
+  }
+
+  tags = {
+    Name = "Terraform State Lock Table"
+  }
+}
+
+# --- Original Infrastructure Resources (omitted for brevity, assume they follow below) ---
+
 # Security Group (SSH + app ports)
 resource "aws_security_group" "app_sg" {
   name        = "microservices-sg"
@@ -44,104 +92,71 @@ resource "aws_security_group" "app_sg" {
   }
 }
 
-# IAM role for EC2 to access ECR
-resource "aws_iam_role" "ec2_role" {
-  name = "microservices-ec2-role"
+# EC2 Instance and all subsequent original resources...
+resource "aws_instance" "app_instance" {
+  ami           = "ami-041e2808018d96e51" # Amazon Linux 2 AMI for ap-south-1 (Mumbai)
+  instance_type = var.instance_type
+  key_name      = var.key_name
+  vpc_security_group_ids = [aws_security_group.app_sg.id]
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
+  # ECR, Docker, and AWS CLI setup script
+  user_data = <<-EOF
+              #!/bin/bash
+              # Install Docker
+              yum update -y
+              amazon-linux-extras install docker -y || true
+              systemctl enable docker
+              systemctl start docker
+              usermod -aG docker ec2-user
+
+              # Install Docker Compose v2
+              DOCKER_CONFIG=/home/ec2-user/.docker
+              mkdir -p $DOCKER_CONFIG/cli-plugins
+              curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" -o $DOCKER_CONFIG/cli-plugins/docker-compose
+              chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
+              chown -R ec2-user:ec2-user $DOCKER_CONFIG
+
+              # Add Docker Compose to PATH for all users
+              echo "export PATH=\$PATH:/home/ec2-user/.docker/cli-plugins" >> /etc/profile.d/docker-compose.sh
+              source /etc/profile.d/docker-compose.sh
+
+              # Install AWS CLI v2
+              yum install -y unzip curl || true
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
+              unzip /tmp/awscliv2.zip -d /tmp
+              /tmp/aws/install || true
+
+              # Create deploy folder
+              mkdir -p /home/ec2-user/deploy
+              chown -R ec2-user:ec2-user /home/ec2-user/deploy
+              EOF
+
+  tags = {
+    Name = "Microservices-Host"
+  }
 }
 
-# Attach AmazonEC2ContainerRegistryReadOnly (or FullAccess if you prefer)
-resource "aws_iam_role_policy_attachment" "ec2_role_ecr" {
-  role       = aws_iam_role.ec2_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
-}
-
-resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "microservices-ec2-profile"
-  role = aws_iam_role.ec2_role.name
-}
-
-# ECR repositories
+# ECR Repositories
 resource "aws_ecr_repository" "user" {
-  name = "user-service-repo"
+  name                 = "microservice-user"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
 
 resource "aws_ecr_repository" "orders" {
-  name = "orders-service-repo"
+  name                 = "microservice-orders"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
 
 resource "aws_ecr_repository" "inventory" {
-  name = "inventory-service-repo"
-}
-
-# EC2 instance
-data "aws_ami" "amazon_linux_2" {
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  name                 = "microservice-inventory"
+  image_tag_mutability = "MUTABLE"
+  image_scanning_configuration {
+    scan_on_push = true
   }
 }
-
-resource "aws_instance" "app_instance" {
-  ami                    = data.aws_ami.amazon_linux_2.id
-  instance_type          = var.instance_type
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.app_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
-
-  # user_data to install docker, docker-compose and awscli, and prepare deploy folder
-  user_data = <<-EOF
-                #!/bin/bash
-                set -e
-
-                # Update packages
-                yum update -y || true
-
-                # Install Docker
-                amazon-linux-extras install docker -y || true
-                systemctl enable docker
-                systemctl start docker
-                usermod -aG docker ec2-user
-
-                # Install Docker Compose v2
-                DOCKER_CONFIG=/home/ec2-user/.docker
-                mkdir -p $DOCKER_CONFIG/cli-plugins
-                curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" -o $DOCKER_CONFIG/cli-plugins/docker-compose
-                chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
-                chown -R ec2-user:ec2-user $DOCKER_CONFIG
-
-                # Add Docker Compose to PATH for all users
-                echo "export PATH=\$PATH:/home/ec2-user/.docker/cli-plugins" >> /etc/profile.d/docker-compose.sh
-                source /etc/profile.d/docker-compose.sh
-
-                # Install AWS CLI v2
-                yum install -y unzip curl || true
-                curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
-                unzip /tmp/awscliv2.zip -d /tmp
-                /tmp/aws/install || true
-
-                # Create deploy folder
-                mkdir -p /home/ec2-user/deploy
-                chown -R ec2-user:ec2-user /home/ec2-user/deploy
-
-                # Verify installations
-                docker --version
-                docker compose version
-                aws --version
-                EOF
-
-  tags = {
-    Name = "microservices-app"
-  }
-}
-

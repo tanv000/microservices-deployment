@@ -19,7 +19,13 @@ pipeline {
                 dir('terraform') {
                     withAWS(credentials: 'aws-access', region: "${REGION}") {
                         sh '''
-                            terraform init -input=false
+                            # Initialize the S3 backend. The '-reconfigure' flag is used to switch
+                            # from local to remote state storage on the first run after this change.
+                            # It is safe to use on subsequent runs as well.
+                            terraform init -input=false -reconfigure
+                            
+                            # The first 'apply' will create the S3 bucket and DynamoDB lock table
+                            # before provisioning the rest of the infrastructure.
                             terraform plan -out=tfplan -input=false
                             terraform apply -auto-approve tfplan
                         '''
@@ -38,12 +44,6 @@ pipeline {
                         env.EC2_IP         = sh(script: 'terraform output -raw ec2_public_ip', returnStdout: true).trim()
                         env.AWS_ACCOUNT_ID = sh(script: 'terraform output -raw aws_account_id', returnStdout: true).trim()
                     }
-
-                    echo "ECR URLs:"
-                    echo "User Repo: ${env.USER_REPO}"
-                    echo "Orders Repo: ${env.ORDERS_REPO}"
-                    echo "Inventory Repo: ${env.INVENTORY_REPO}"
-                    echo "EC2 IP: ${env.EC2_IP}"
                 }
             }
         }
@@ -52,22 +52,28 @@ pipeline {
             steps {
                 withAWS(credentials: 'aws-access', region: "${REGION}") {
                     script {
-                        def services = [
-                            "user-service": env.USER_REPO,
-                            "order-service": env.ORDERS_REPO,
-                            "inventory-service": env.INVENTORY_REPO
-                        ]
+                        // AWS ECR Login
+                        sh "aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
-                        for (service in services.keySet()) {
-                            sh """
-                                echo "Building ${service}..."
-                                docker build -t ${service}:${IMAGE_TAG} ./${service}
-                                docker tag ${service}:${IMAGE_TAG} ${services[service]}:${IMAGE_TAG}
+                        // Build and Push User Service
+                        dir('user-service') {
+                            sh "docker build -t microservice-user:${IMAGE_TAG} ."
+                            sh "docker tag microservice-user:${IMAGE_TAG} ${USER_REPO}:${IMAGE_TAG}"
+                            sh "docker push ${USER_REPO}:${IMAGE_TAG}"
+                        }
 
-                                echo "Pushing ${service} to ECR..."
-                                aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
-                                docker push ${services[service]}:${IMAGE_TAG}
-                            """
+                        // Build and Push Orders Service
+                        dir('orders-service') {
+                            sh "docker build -t microservice-orders:${IMAGE_TAG} ."
+                            sh "docker tag microservice-orders:${IMAGE_TAG} ${ORDERS_REPO}:${IMAGE_TAG}"
+                            sh "docker push ${ORDERS_REPO}:${IMAGE_TAG}"
+                        }
+
+                        // Build and Push Inventory Service
+                        dir('inventory-service') {
+                            sh "docker build -t microservice-inventory:${IMAGE_TAG} ."
+                            sh "docker tag microservice-inventory:${IMAGE_TAG} ${INVENTORY_REPO}:${IMAGE_TAG}"
+                            sh "docker push ${INVENTORY_REPO}:${IMAGE_TAG}"
                         }
                     }
                 }
@@ -78,7 +84,7 @@ pipeline {
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
                     script {
-                        // Replace placeholders in docker-compose.yml dynamically
+                        // Copy deploy file (ensures we use the current repo URLs)
                         sh '''
                             cp docker-compose.yml docker-compose.deploy.yml
                             sed -i "s|USER_REPO_PLACEHOLDER|${USER_REPO}|g" docker-compose.deploy.yml
@@ -89,9 +95,9 @@ pipeline {
                         // Deploy to EC2
                         sh """
                             echo "Deploying to EC2: ${EC2_IP}"
-                            scp -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" docker-compose.deploy.yml $SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
+                            scp -o StrictHostKeyChecking=no -i "\$SSH_KEY_FILE" docker-compose.deploy.yml \$SSH_USER@${EC2_IP}:/home/ec2-user/deploy/docker-compose.yml
 
-                            ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" $SSH_USER@${EC2_IP} "
+                            ssh -o StrictHostKeyChecking=no -i "\$SSH_KEY_FILE" \$SSH_USER@${EC2_IP} "
                                 mkdir -p /home/ec2-user/deploy
 
                                 # Login to ECR on EC2
@@ -111,7 +117,7 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline executed successfully!"
+            echo "Pipeline executed successfully! Infrastructure state is now stored in S3."
         }
         failure {
             echo "Pipeline failed. Check Jenkins logs."
