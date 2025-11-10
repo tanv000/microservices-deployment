@@ -1,12 +1,4 @@
 terraform {
-  backend "s3" {
-    bucket         = "microservices-terraform-state-tanvi"
-    key            = "terraform/state.tfstate"
-    region         = "ap-south-1"
-    dynamodb_table = "terraform-locks"
-    encrypt        = true
-  }
-
   required_providers {
     aws = {
       source  = "hashicorp/aws"
