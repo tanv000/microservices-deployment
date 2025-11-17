@@ -3,3 +3,4 @@ Dockerfile.jenkins
 .terraform.lock.hcl
 terraform.tfstate
 terraform.tfstate.backup
+jenkins_home
